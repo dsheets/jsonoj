@@ -99,6 +99,11 @@ let rec has_char_to_escape s len i =
 let has_char_to_escape s =
   has_char_to_escape s (String.length s) 0
 
+let fquote_json_string fmt s =
+  let buf = Buffer.create (String.length s) in
+  escape_json_string (Buffer.add_string buf) (Buffer.add_char buf) s;
+  Format.fprintf fmt "\"%s\"" (Buffer.contents buf)
+
 let bquote_json_string buf s =
   Buffer.add_string buf "\"";
 
@@ -181,9 +186,91 @@ and string_of_json_float ?(allow_nan=false) f =
       else
 	s
 
+module Pretty =
+struct
+  open Format
+    
+  (* Printing anything but a value in a key:value pair.
 
-let string_of_json ?(allow_nan=false) x =
+     Opening and closing brackets in such arrays and objects
+     are aligned vertically if they are not on the same line. 
+  *)
+  let rec fprint_json allow_nan fmt = function
+      Object l -> fprint_object allow_nan fmt l
+    | Array l -> fprint_array allow_nan fmt l
+    | Bool b -> fprintf fmt "%s" (if b then "true" else "false")
+    | Null -> fprintf fmt "null"
+    | Int i -> fprintf fmt "%i" i
+    | Float f -> fprint_float allow_nan fmt f
+    | String s -> fquote_json_string fmt s
+	
+  (* Printing an array which is not the value in a key:value pair *)
+  and fprint_array allow_nan fmt = function
+      [] -> fprintf fmt "[]"
+    | x :: tl -> 
+	fprintf fmt "@[<hv 2>[@ "; 
+	fprint_json allow_nan fmt x;
+	List.iter (fun x -> 
+		     fprintf fmt ",@ ";
+		     fprint_json allow_nan fmt x) tl;
+	fprintf fmt "@;<1 -2>]@]"
+	  
+  (* Printing an object which is not the value in a key:value pair *)
+  and fprint_object allow_nan fmt = function
+      [] -> fprintf fmt "{}"
+    | x :: tl -> 
+	fprintf fmt "@[<hv 2>{@ "; 
+	fprint_pair allow_nan fmt x;
+	List.iter (fun x -> 
+		     fprintf fmt ",@ ";
+		     fprint_pair allow_nan fmt x) tl;
+	fprintf fmt "@;<1 -2>}@]"
+
+  (* Printing a key:value pair.
+
+     The opening bracket stays on the same line as the key, no matter what,
+     and the closing bracket is either on the same line
+     or vertically aligned with the beginning of the key. 
+  *)
+  and fprint_pair allow_nan fmt (key, x) =
+    match x with
+	Object l -> 
+	  (match l with
+	       [] -> fprintf fmt "%a: {}" fquote_json_string key
+	     | x :: tl -> 
+		 fprintf fmt "@[<hv 2>%a: {@ " fquote_json_string key;
+		 fprint_pair allow_nan fmt x;
+		 List.iter (fun x -> 
+			      fprintf fmt ",@ ";
+			      fprint_pair allow_nan fmt x) tl;
+		 fprintf fmt "@;<1 -2>}@]")
+      | Array l ->
+	  (match l with
+	       [] -> fprintf fmt "%a: []" fquote_json_string key
+	     | x :: tl -> 
+		 fprintf fmt "@[<hv 2>%a: [@ " fquote_json_string key;
+		 fprint_json allow_nan fmt x;
+		 List.iter (fun x -> 
+			      fprintf fmt ",@ ";
+			      fprint_json allow_nan fmt x) tl;
+		 fprintf fmt "@;<1 -2>]@]")
+      | _ -> 
+	  (* An atom, perhaps a long string that would go to the next line *)
+	  fprintf fmt "@[%a:@;<1 2>%a@]" 
+	    fquote_json_string key (fprint_json allow_nan) x
+
+  let print ?(allow_nan = false) ?(recursive = false) fmt x =
+    if not recursive then
+      Browse.assert_object_or_array x;
+    fprint_json allow_nan fmt x
+end
+
+let string_of_json ?(allow_nan=false) ?(compact=false) x =
   let buf = Buffer.create 2000 in
-  bprint_json allow_nan buf x;
+  if compact then bprint_json allow_nan buf x
+  else (let fmt = Format.formatter_of_buffer buf in
+        Browse.assert_object_or_array x;
+        Pretty.fprint_json allow_nan fmt x;
+        Format.pp_print_flush fmt ());
   Buffer.contents buf
 

@@ -38,7 +38,7 @@ val json_of_string :
   [NaN], [Infinity] and [-Infinity].
 *)
 val string_of_json :
-  ?allow_nan: bool ->
+  ?allow_nan: bool -> ?compact: bool ->
   Json_type.t -> string
 
 
